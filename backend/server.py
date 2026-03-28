@@ -291,7 +291,7 @@ async def get_profile(user_id: str):
 
 # ============ Job Endpoints ============
 
-@api_router.post("/jobs")
+@api_router.post("/jobs", status_code=201)
 async def create_job(data: JobCreate, user: dict = Depends(get_current_user)):
     if user["role"] != "employer":
         raise HTTPException(status_code=403, detail="Only employers can post jobs")
@@ -444,7 +444,7 @@ async def update_application_status(app_id: str, request: Request, user: dict = 
 
 # ============ Tool Rental Endpoints ============
 
-@api_router.post("/tools")
+@api_router.post("/tools", status_code=201)
 async def create_tool(data: ToolRentalCreate, user: dict = Depends(get_current_user)):
     if user["role"] != "vendor" and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Only vendors can list tools")
