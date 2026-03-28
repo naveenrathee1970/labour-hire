@@ -534,6 +534,224 @@ class LabourHireAPITester:
 
         return True
 
+    def test_geocoding_endpoints(self):
+        """Test geocoding functionality"""
+        # Test geocoding Mumbai
+        success, response = self.run_test(
+            "Geocode Mumbai",
+            "GET",
+            "/geocode?address=Mumbai",
+            200
+        )
+        if success:
+            self.log(f"✅ Mumbai geocoded to: {response.get('lat')}, {response.get('lng')}")
+
+        # Test geocoding Delhi
+        success, response = self.run_test(
+            "Geocode Delhi",
+            "GET",
+            "/geocode?address=Delhi",
+            200
+        )
+        if success:
+            self.log(f"✅ Delhi geocoded to: {response.get('lat')}, {response.get('lng')}")
+
+        # Test invalid address
+        self.run_test(
+            "Geocode Invalid Address",
+            "GET",
+            "/geocode?address=NonExistentPlace12345",
+            404
+        )
+
+        return True
+
+    def test_geo_job_creation(self):
+        """Test job creation with geo-location features"""
+        if not self.employer_token:
+            self.log("❌ No employer token for geo job tests", "ERROR")
+            return False
+
+        # Create job with explicit coordinates
+        geo_job_data = {
+            "title": "Geo-tagged Construction Job",
+            "description": "Building work with GPS coordinates",
+            "project_type": "residential",
+            "location": "Mumbai, Maharashtra",
+            "latitude": 19.0760,
+            "longitude": 72.8777,
+            "labours_needed": 3,
+            "duration_days": 15,
+            "pay_type": "daily",
+            "pay_amount": 900,
+            "safety_precautions": "GPS tracking required"
+        }
+        
+        success, response = self.run_test(
+            "Create Geo-tagged Job",
+            "POST",
+            "/jobs",
+            201,
+            data=geo_job_data,
+            auth_token=self.employer_token
+        )
+        if success and '_id' in response:
+            geo_job_id = response['_id']
+            self.log(f"✅ Geo-tagged job created with ID: {geo_job_id}")
+
+        # Create job with only location text (auto-geocoding)
+        auto_geo_job_data = {
+            "title": "Auto-geocoded Job",
+            "description": "Job that should auto-geocode from location",
+            "project_type": "commercial",
+            "location": "Pune, Maharashtra",
+            "labours_needed": 2,
+            "duration_days": 10,
+            "pay_type": "daily",
+            "pay_amount": 850
+        }
+        
+        success, response = self.run_test(
+            "Create Auto-geocoded Job",
+            "POST",
+            "/jobs",
+            201,
+            data=auto_geo_job_data,
+            auth_token=self.employer_token
+        )
+        if success and '_id' in response:
+            auto_geo_job_id = response['_id']
+            self.log(f"✅ Auto-geocoded job created with ID: {auto_geo_job_id}")
+
+        return True
+
+    def test_nearby_jobs_endpoints(self):
+        """Test nearby jobs functionality"""
+        if not self.labour_token:
+            self.log("❌ No labour token for nearby jobs tests", "ERROR")
+            return False
+
+        # Test nearby jobs search (Mumbai coordinates)
+        mumbai_lat, mumbai_lng = 19.0760, 72.8777
+        success, response = self.run_test(
+            "Get Nearby Jobs (Mumbai 100km)",
+            "GET",
+            f"/jobs/nearby?latitude={mumbai_lat}&longitude={mumbai_lng}&radius_km=100",
+            200,
+            auth_token=self.labour_token
+        )
+        if success:
+            jobs = response.get('jobs', [])
+            total = response.get('total', 0)
+            self.log(f"✅ Found {total} jobs within 100km of Mumbai")
+            if jobs:
+                for job in jobs[:2]:  # Log first 2 jobs
+                    distance = job.get('distance_km', 'N/A')
+                    self.log(f"   - {job.get('title', 'Unknown')} ({distance} km away)")
+
+        # Test nearby jobs with small radius (should exclude far jobs)
+        success, response = self.run_test(
+            "Get Nearby Jobs (Mumbai 5km)",
+            "GET",
+            f"/jobs/nearby?latitude={mumbai_lat}&longitude={mumbai_lng}&radius_km=5",
+            200,
+            auth_token=self.labour_token
+        )
+        if success:
+            small_radius_total = response.get('total', 0)
+            self.log(f"✅ Found {small_radius_total} jobs within 5km of Mumbai")
+
+        # Test nearby jobs with large radius (should include more jobs)
+        success, response = self.run_test(
+            "Get Nearby Jobs (Mumbai 200km)",
+            "GET",
+            f"/jobs/nearby?latitude={mumbai_lat}&longitude={mumbai_lng}&radius_km=200",
+            200,
+            auth_token=self.labour_token
+        )
+        if success:
+            large_radius_total = response.get('total', 0)
+            self.log(f"✅ Found {large_radius_total} jobs within 200km of Mumbai")
+
+        # Test nearby jobs count endpoint
+        success, response = self.run_test(
+            "Get Nearby Jobs Count",
+            "GET",
+            f"/jobs/nearby/count?latitude={mumbai_lat}&longitude={mumbai_lng}&radius_km=100",
+            200,
+            auth_token=self.labour_token
+        )
+        if success:
+            count = response.get('count', 0)
+            self.log(f"✅ Nearby jobs count: {count}")
+
+        # Test with project type filter
+        success, response = self.run_test(
+            "Get Nearby Jobs (Residential only)",
+            "GET",
+            f"/jobs/nearby?latitude={mumbai_lat}&longitude={mumbai_lng}&radius_km=100&project_type=residential",
+            200,
+            auth_token=self.labour_token
+        )
+        if success:
+            filtered_total = response.get('total', 0)
+            self.log(f"✅ Found {filtered_total} residential jobs within 100km")
+
+        return True
+
+    def test_geo_profile_updates(self):
+        """Test profile updates with geo-location"""
+        if not self.labour_token:
+            self.log("❌ No labour token for geo profile tests", "ERROR")
+            return False
+
+        # Update profile with geo-location and radius preference
+        geo_profile_data = {
+            "latitude": 19.0760,
+            "longitude": 72.8777,
+            "preferred_radius_km": 75,
+            "address": "Mumbai, Maharashtra"
+        }
+        
+        success, response = self.run_test(
+            "Update Profile with Geo-location",
+            "PUT",
+            "/profile",
+            200,
+            data=geo_profile_data,
+            auth_token=self.labour_token
+        )
+        
+        if success:
+            geo_location = response.get('geo_location')
+            if geo_location:
+                self.log(f"✅ Profile updated with GeoJSON: {geo_location}")
+            else:
+                self.log("⚠️ Profile updated but no geo_location field found")
+
+        # Verify the profile has geo data
+        success, response = self.run_test(
+            "Get Profile with Geo-location",
+            "GET",
+            f"/profile/{self.labour_id}",
+            200
+        )
+        
+        if success:
+            lat = response.get('latitude')
+            lng = response.get('longitude')
+            radius = response.get('preferred_radius_km')
+            geo_location = response.get('geo_location')
+            
+            if lat and lng:
+                self.log(f"✅ Profile has coordinates: {lat}, {lng}")
+            if radius:
+                self.log(f"✅ Profile has radius preference: {radius} km")
+            if geo_location:
+                self.log(f"✅ Profile has GeoJSON: {geo_location.get('type')} at {geo_location.get('coordinates')}")
+
+        return True
+
     def test_stripe_payment_endpoints(self):
         """Test Stripe payment integration endpoints"""
         if not self.employer_token:
@@ -782,7 +1000,10 @@ class LabourHireAPITester:
             ("Admin Login", self.test_admin_login),
             ("User Registration", self.test_user_registration),
             ("Auth Endpoints", self.test_auth_endpoints),
+            ("Geocoding Endpoints", self.test_geocoding_endpoints),
+            ("Geo Job Creation", self.test_geo_job_creation),
             ("Job Endpoints", self.test_job_endpoints),
+            ("Nearby Jobs Endpoints", self.test_nearby_jobs_endpoints),
             ("Application Endpoints", self.test_application_endpoints),
             ("Tool Endpoints", self.test_tool_endpoints),
             ("Wallet Endpoints", self.test_wallet_endpoints),
@@ -793,6 +1014,7 @@ class LabourHireAPITester:
             ("Admin Endpoints", self.test_admin_endpoints),
             ("Labour Search", self.test_labour_search),
             ("Profile Endpoints", self.test_profile_endpoints),
+            ("Geo Profile Updates", self.test_geo_profile_updates),
             ("Error Cases", self.test_error_cases),
         ]
 

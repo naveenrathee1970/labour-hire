@@ -9,7 +9,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import {
   Briefcase, Plus, Users, IndianRupee, MapPin, Clock, Shield,
-  ChevronDown, Search, X
+  ChevronDown, Search, X, Loader2, Navigation
 } from 'lucide-react';
 
 export default function EmployerDashboard() {
@@ -23,8 +23,11 @@ export default function EmployerDashboard() {
   const [form, setForm] = useState({
     title: '', description: '', project_type: 'residential', location: '',
     labours_needed: 1, duration_days: 30, pay_type: 'daily', pay_amount: 0,
-    safety_precautions: '', skills_required: [], licence_number: ''
+    safety_precautions: '', skills_required: [], licence_number: '',
+    latitude: null, longitude: null
   });
+  const [geocoding, setGeocoding] = useState(false);
+  const [geoStatus, setGeoStatus] = useState('');
 
   useEffect(() => {
     loadData();
@@ -50,6 +53,19 @@ export default function EmployerDashboard() {
     }
   };
 
+  const handleGeocodeLocation = async () => {
+    if (!form.location.trim()) return;
+    setGeocoding(true);
+    setGeoStatus('');
+    try {
+      const res = await api('get', `/geocode?address=${encodeURIComponent(form.location)}`);
+      setForm({ ...form, latitude: res.data.lat, longitude: res.data.lng });
+      setGeoStatus(`Located: ${res.data.lat.toFixed(4)}, ${res.data.lng.toFixed(4)}`);
+    } catch {
+      setGeoStatus('Could not locate. Job will auto-geocode on creation.');
+    } finally { setGeocoding(false); }
+  };
+
   const handleCreateJob = async (e) => {
     e.preventDefault();
     try {
@@ -63,8 +79,10 @@ export default function EmployerDashboard() {
       setForm({
         title: '', description: '', project_type: 'residential', location: '',
         labours_needed: 1, duration_days: 30, pay_type: 'daily', pay_amount: 0,
-        safety_precautions: '', skills_required: [], licence_number: ''
+        safety_precautions: '', skills_required: [], licence_number: '',
+        latitude: null, longitude: null
       });
+      setGeoStatus('');
       loadData();
     } catch (err) {
       console.error(err);
@@ -162,7 +180,13 @@ export default function EmployerDashboard() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-[#9BA3B5] text-xs uppercase tracking-[0.15em]">Location</Label>
-                  <Input data-testid="job-location-input" value={form.location} onChange={e => setForm({...form, location: e.target.value})} required className="mt-1 bg-[#0B132B] border-[#28385E] text-white focus:border-[#00A8E8]" placeholder="City, State" />
+                  <div className="flex gap-2 mt-1">
+                    <Input data-testid="job-location-input" value={form.location} onChange={e => setForm({...form, location: e.target.value})} required className="bg-[#0B132B] border-[#28385E] text-white focus:border-[#00A8E8]" placeholder="City, State" />
+                    <Button type="button" data-testid="job-geocode-btn" onClick={handleGeocodeLocation} disabled={geocoding || !form.location.trim()} variant="outline" className="border-[#28385E] text-[#9BA3B5] hover:text-[#00A8E8] hover:border-[#00A8E8] bg-transparent px-3 flex-shrink-0">
+                      {geocoding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Navigation className="w-4 h-4" />}
+                    </Button>
+                  </div>
+                  {geoStatus && <p className="text-[10px] text-[#00A8E8] mt-1">{geoStatus}</p>}
                 </div>
                 <div>
                   <Label className="text-[#9BA3B5] text-xs uppercase tracking-[0.15em]">Licence Number</Label>

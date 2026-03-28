@@ -14,6 +14,7 @@ import bcrypt
 import jwt
 import secrets
 import uuid
+import math
 import requests as http_requests
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
@@ -134,6 +135,74 @@ async def create_notification(user_id: str, title: str, message: str, ntype: str
         logger.info(f"[SMS ALERT] To: {phone} | {title}: {message}")
     logger.info(f"[NOTIFICATION] User {user_id}: {title} - {message}")
 
+# ============ Geocoding Helper ============
+def geocode_address(address: str) -> Optional[Dict]:
+    """Geocode an address using Nominatim (OpenStreetMap) with fallback for common cities."""
+    # Fallback for common Indian cities
+    common_cities = {
+        "mumbai": {"lat": 19.0760, "lng": 72.8777, "display_name": "Mumbai, Maharashtra, India"},
+        "delhi": {"lat": 28.6139, "lng": 77.2090, "display_name": "Delhi, India"},
+        "new delhi": {"lat": 28.6139, "lng": 77.2090, "display_name": "New Delhi, India"},
+        "bangalore": {"lat": 12.9716, "lng": 77.5946, "display_name": "Bangalore, Karnataka, India"},
+        "bengaluru": {"lat": 12.9716, "lng": 77.5946, "display_name": "Bengaluru, Karnataka, India"},
+        "chennai": {"lat": 13.0827, "lng": 80.2707, "display_name": "Chennai, Tamil Nadu, India"},
+        "hyderabad": {"lat": 17.3850, "lng": 78.4867, "display_name": "Hyderabad, Telangana, India"},
+        "kolkata": {"lat": 22.5726, "lng": 88.3639, "display_name": "Kolkata, West Bengal, India"},
+        "pune": {"lat": 18.5204, "lng": 73.8567, "display_name": "Pune, Maharashtra, India"},
+        "ahmedabad": {"lat": 23.0225, "lng": 72.5714, "display_name": "Ahmedabad, Gujarat, India"},
+        "jaipur": {"lat": 26.9124, "lng": 75.7873, "display_name": "Jaipur, Rajasthan, India"},
+        "lucknow": {"lat": 26.8467, "lng": 80.9462, "display_name": "Lucknow, Uttar Pradesh, India"},
+        "chandigarh": {"lat": 30.7333, "lng": 76.7794, "display_name": "Chandigarh, India"},
+        "noida": {"lat": 28.5355, "lng": 77.3910, "display_name": "Noida, Uttar Pradesh, India"},
+        "gurgaon": {"lat": 28.4595, "lng": 77.0266, "display_name": "Gurgaon, Haryana, India"},
+        "gurugram": {"lat": 28.4595, "lng": 77.0266, "display_name": "Gurugram, Haryana, India"},
+        "surat": {"lat": 21.1702, "lng": 72.8311, "display_name": "Surat, Gujarat, India"},
+        "patna": {"lat": 25.6093, "lng": 85.1376, "display_name": "Patna, Bihar, India"},
+        "indore": {"lat": 22.7196, "lng": 75.8577, "display_name": "Indore, Madhya Pradesh, India"},
+        "bhopal": {"lat": 23.2599, "lng": 77.4126, "display_name": "Bhopal, Madhya Pradesh, India"},
+        "nagpur": {"lat": 21.1458, "lng": 79.0882, "display_name": "Nagpur, Maharashtra, India"},
+        "thane": {"lat": 19.2183, "lng": 72.9781, "display_name": "Thane, Maharashtra, India"},
+        "new york": {"lat": 40.7128, "lng": -74.0060, "display_name": "New York, NY, USA"},
+        "london": {"lat": 51.5074, "lng": -0.1278, "display_name": "London, UK"},
+    }
+    addr_lower = address.strip().lower()
+    for city, coords in common_cities.items():
+        if city in addr_lower:
+            return coords
+    # Try Nominatim
+    try:
+        import time
+        time.sleep(1)  # Rate limit compliance
+        resp = http_requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": address, "format": "json", "limit": 1},
+            headers={"User-Agent": "LabourHub/1.0 (contact@labourhub.in)"},
+            timeout=10
+        )
+        resp.raise_for_status()
+        results = resp.json()
+        if results:
+            return {
+                "lat": float(results[0]["lat"]),
+                "lng": float(results[0]["lon"]),
+                "display_name": results[0].get("display_name", address)
+            }
+    except Exception as e:
+        logger.error(f"Geocoding failed for '{address}': {e}")
+    return None
+
+def haversine_km(lat1, lng1, lat2, lng2):
+    """Calculate distance between two points in km."""
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+def make_geo_point(lng: float, lat: float) -> dict:
+    """Create GeoJSON Point. MongoDB uses [longitude, latitude] order."""
+    return {"type": "Point", "coordinates": [lng, lat]}
+
 # Create the main app
 app = FastAPI()
 
@@ -158,6 +227,8 @@ class JobCreate(BaseModel):
     description: str
     project_type: str  # residential, commercial, industrial, infrastructure
     location: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     labours_needed: int = 1
     duration_days: int = 30
     pay_type: str = "daily"  # daily, weekly, monthly
@@ -197,6 +268,9 @@ class ProfileUpdate(BaseModel):
     experience_years: Optional[int] = None
     daily_rate: Optional[float] = None
     bio: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    preferred_radius_km: Optional[float] = None
 
 class WalletTopUp(BaseModel):
     amount: float
@@ -249,6 +323,12 @@ async def register(input_data: RegisterInput, response: Response):
         "experience_years": 0,
         "daily_rate": 0,
         "bio": "",
+        "latitude": None,
+        "longitude": None,
+        "preferred_radius_km": 50,
+        "geo_location": None,
+        "avg_rating": 0,
+        "review_count": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.users.insert_one(user_doc)
@@ -351,6 +431,16 @@ async def update_profile(data: ProfileUpdate, user: dict = Depends(get_current_u
     update_fields = {k: v for k, v in data.model_dump().items() if v is not None}
     if not update_fields:
         raise HTTPException(status_code=400, detail="No fields to update")
+    # Build GeoJSON point if coordinates provided
+    lat = update_fields.pop("latitude", None)
+    lng = update_fields.pop("longitude", None)
+    radius = update_fields.pop("preferred_radius_km", None)
+    if lat is not None and lng is not None:
+        update_fields["geo_location"] = make_geo_point(lng, lat)
+        update_fields["latitude"] = lat
+        update_fields["longitude"] = lng
+    if radius is not None:
+        update_fields["preferred_radius_km"] = radius
     await db.users.update_one({"_id": ObjectId(user["_id"])}, {"$set": update_fields})
     updated = await db.users.find_one({"_id": ObjectId(user["_id"])}, {"password_hash": 0})
     return serialize_doc(updated)
@@ -368,29 +458,51 @@ async def get_profile(user_id: str):
 async def create_job(data: JobCreate, user: dict = Depends(get_current_user)):
     if user["role"] != "employer":
         raise HTTPException(status_code=403, detail="Only employers can post jobs")
+    job_dict = data.model_dump()
+    lat = job_dict.pop("latitude", None)
+    lng = job_dict.pop("longitude", None)
+    # Auto-geocode if coords not provided
+    if (lat is None or lng is None) and data.location:
+        geo = geocode_address(data.location)
+        if geo:
+            lat, lng = geo["lat"], geo["lng"]
     job_doc = {
-        **data.model_dump(),
+        **job_dict,
         "employer_id": user["_id"],
         "employer_name": user.get("name", ""),
         "company_name": user.get("company_name", ""),
         "status": "open",
         "applications_count": 0,
+        "latitude": lat,
+        "longitude": lng,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if lat is not None and lng is not None:
+        job_doc["geo_location"] = make_geo_point(lng, lat)
     result = await db.jobs.insert_one(job_doc)
     job_doc["_id"] = str(result.inserted_id)
-    # SMS notify all labourers about new job
-    labours = await db.users.find({"role": "labour"}, {"_id": 1, "phone": 1, "name": 1}).to_list(100)
+    # Smart geo-targeted notifications: only notify labourers within radius or all if no geo
+    labours = await db.users.find({"role": "labour"}, {"_id": 1, "phone": 1, "name": 1, "latitude": 1, "longitude": 1, "preferred_radius_km": 1}).to_list(500)
     for l in labours:
         lid = str(l["_id"])
-        await create_notification(
-            lid,
-            "New Job Available",
-            f"'{data.title}' in {data.location} - Rs {data.pay_amount}/{data.pay_type}. Apply now!",
-            "job_alert",
-            sms=True,
-            phone=l.get("phone", "")
-        )
+        should_notify = True
+        distance_text = ""
+        if lat is not None and lng is not None and l.get("latitude") and l.get("longitude"):
+            dist = haversine_km(l["latitude"], l["longitude"], lat, lng)
+            radius = l.get("preferred_radius_km", 50) or 50
+            if dist > radius:
+                should_notify = False
+            else:
+                distance_text = f" ({dist:.1f} km away)"
+        if should_notify:
+            await create_notification(
+                lid,
+                "New Job Nearby" if distance_text else "New Job Available",
+                f"'{data.title}' in {data.location}{distance_text} - Rs {data.pay_amount}/{data.pay_type}. Apply now!",
+                "job_alert",
+                sms=True,
+                phone=l.get("phone", "")
+            )
     return serialize_doc(job_doc)
 
 @api_router.get("/jobs")
@@ -418,6 +530,83 @@ async def list_jobs(
     jobs = await db.jobs.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
     total = await db.jobs.count_documents(query)
     return {"jobs": [serialize_doc(j) for j in jobs], "total": total}
+
+@api_router.get("/jobs/nearby")
+async def get_nearby_jobs(
+    latitude: float = Query(..., description="User latitude"),
+    longitude: float = Query(..., description="User longitude"),
+    radius_km: float = Query(50, description="Search radius in km"),
+    status: Optional[str] = "open",
+    project_type: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 20,
+    user: dict = Depends(get_current_user)
+):
+    """Find jobs near a location using MongoDB geospatial query."""
+    radius_meters = radius_km * 1000
+    pipeline = [
+        {
+            "$geoNear": {
+                "near": {"type": "Point", "coordinates": [longitude, latitude]},
+                "distanceField": "distance_meters",
+                "maxDistance": radius_meters,
+                "spherical": True,
+                "query": {}
+            }
+        }
+    ]
+    match_stage = {}
+    if status:
+        match_stage["status"] = status
+    if project_type:
+        match_stage["project_type"] = project_type
+    if match_stage:
+        pipeline[0]["$geoNear"]["query"] = match_stage
+    pipeline.append({"$addFields": {"distance_km": {"$round": [{"$divide": ["$distance_meters", 1000]}, 1]}}})
+    pipeline.append({"$sort": {"distance_meters": 1}})
+    count_pipeline = pipeline.copy()
+    count_pipeline.append({"$count": "total"})
+    count_result = await db.jobs.aggregate(count_pipeline).to_list(1)
+    total = count_result[0]["total"] if count_result else 0
+    pipeline.append({"$skip": skip})
+    pipeline.append({"$limit": limit})
+    jobs = await db.jobs.aggregate(pipeline).to_list(limit)
+    serialized = []
+    for j in jobs:
+        j["_id"] = str(j["_id"])
+        for key, val in j.items():
+            if isinstance(val, ObjectId):
+                j[key] = str(val)
+            if isinstance(val, datetime):
+                j[key] = val.isoformat()
+        j.pop("geo_location", None)
+        j.pop("distance_meters", None)
+        serialized.append(j)
+    return {"jobs": serialized, "total": total, "radius_km": radius_km, "center": {"latitude": latitude, "longitude": longitude}}
+
+@api_router.get("/jobs/nearby/count")
+async def count_nearby_jobs(
+    latitude: float = Query(...),
+    longitude: float = Query(...),
+    radius_km: float = Query(50),
+    user: dict = Depends(get_current_user)
+):
+    """Count nearby open jobs for badge display."""
+    radius_meters = radius_km * 1000
+    pipeline = [
+        {
+            "$geoNear": {
+                "near": {"type": "Point", "coordinates": [longitude, latitude]},
+                "distanceField": "distance_meters",
+                "maxDistance": radius_meters,
+                "spherical": True,
+                "query": {"status": "open"}
+            }
+        },
+        {"$count": "total"}
+    ]
+    result = await db.jobs.aggregate(pipeline).to_list(1)
+    return {"count": result[0]["total"] if result else 0, "radius_km": radius_km}
 
 @api_router.get("/jobs/{job_id}")
 async def get_job(job_id: str):
@@ -743,6 +932,16 @@ async def list_labours(
     total = await db.users.count_documents(query)
     return {"labours": [serialize_doc(l) for l in labours], "total": total}
 
+# ============ Geocoding & Nearby Jobs ============
+
+@api_router.get("/geocode")
+async def geocode_location(address: str):
+    """Geocode an address to lat/lng coordinates."""
+    result = geocode_address(address)
+    if not result:
+        raise HTTPException(status_code=404, detail="Could not geocode this address. Try a more specific location.")
+    return result
+
 # ============ Stripe Payment Endpoints ============
 
 @api_router.post("/payments/create-checkout")
@@ -1063,6 +1262,9 @@ async def startup():
     await db.reviews.create_index("reviewed_user_id")
     await db.reviews.create_index("reviewer_id")
     await db.notifications.create_index("user_id")
+    # Geospatial indexes
+    await db.jobs.create_index([("geo_location", "2dsphere")])
+    await db.users.create_index([("geo_location", "2dsphere")])
     # Init storage
     try:
         init_storage()

@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard, Briefcase, Users, Wrench, Wallet,
   LogOut, Shield, ClipboardList, User, ChevronLeft, ChevronRight, HardHat,
-  Bell, Star, FileText
+  Bell, Star, FileText, MapPin
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Separator } from '../components/ui/separator';
@@ -15,6 +15,7 @@ const navItems = {
     { path: '/jobs', label: 'My Jobs', icon: Briefcase },
     { path: '/applications', label: 'Applications', icon: ClipboardList },
     { path: '/labours', label: 'Find Labour', icon: Users },
+    { path: '/nearby-jobs', label: 'Nearby Jobs', icon: MapPin },
     { path: '/tools', label: 'Tool Rentals', icon: Wrench },
     { path: '/wallet', label: 'Wallet', icon: Wallet },
     { path: '/reviews', label: 'Reviews', icon: Star },
@@ -23,7 +24,8 @@ const navItems = {
   ],
   labour: [
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { path: '/browse-jobs', label: 'Browse Jobs', icon: Briefcase },
+    { path: '/nearby-jobs', label: 'Nearby Jobs', icon: MapPin },
+    { path: '/browse-jobs', label: 'Browse All Jobs', icon: Briefcase },
     { path: '/my-applications', label: 'My Applications', icon: ClipboardList },
     { path: '/profile', label: 'My Profile', icon: User },
     { path: '/tools', label: 'Tool Rentals', icon: Wrench },

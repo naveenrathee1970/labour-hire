@@ -7,7 +7,7 @@ import { Badge } from '../components/ui/badge';
 import { Textarea } from '../components/ui/textarea';
 import {
   Briefcase, MapPin, IndianRupee, Clock, Users, Shield,
-  Search, Send, CheckCircle, XCircle, User
+  Search, Send, CheckCircle, XCircle, User, Navigation, Loader2, Radar
 } from 'lucide-react';
 
 export default function LabourDashboard() {
@@ -21,10 +21,12 @@ export default function LabourDashboard() {
   const [applyMsg, setApplyMsg] = useState('');
   const [applyingTo, setApplyingTo] = useState(null);
   const [walletBalance, setWalletBalance] = useState(0);
+  const [geocoding, setGeocoding] = useState(false);
 
   const [profileForm, setProfileForm] = useState({
     name: '', phone: '', aadhaar_number: '', address: '',
-    skills: [], experience_years: 0, daily_rate: 0, bio: ''
+    skills: [], experience_years: 0, daily_rate: 0, bio: '',
+    latitude: null, longitude: null, preferred_radius_km: 50
   });
 
   useEffect(() => { loadData(); }, []);
@@ -45,7 +47,9 @@ export default function LabourDashboard() {
       setProfileForm({
         name: p.name || '', phone: p.phone || '', aadhaar_number: p.aadhaar_number || '',
         address: p.address || '', skills: p.skills || [], experience_years: p.experience_years || 0,
-        daily_rate: p.daily_rate || 0, bio: p.bio || ''
+        daily_rate: p.daily_rate || 0, bio: p.bio || '',
+        latitude: p.latitude || null, longitude: p.longitude || null,
+        preferred_radius_km: p.preferred_radius_km || 50
       });
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
@@ -67,11 +71,22 @@ export default function LabourDashboard() {
         ...profileForm,
         experience_years: Number(profileForm.experience_years),
         daily_rate: Number(profileForm.daily_rate),
+        preferred_radius_km: Number(profileForm.preferred_radius_km),
         skills: typeof profileForm.skills === 'string' ? profileForm.skills.split(',').map(s => s.trim()) : profileForm.skills,
       };
       await api('put', '/profile', data);
       loadData();
     } catch (err) { console.error(err); }
+  };
+
+  const handleGeocodeAddress = async () => {
+    if (!profileForm.address.trim()) return;
+    setGeocoding(true);
+    try {
+      const res = await api('get', `/geocode?address=${encodeURIComponent(profileForm.address)}`);
+      setProfileForm({ ...profileForm, latitude: res.data.lat, longitude: res.data.lng });
+    } catch { /* silent */ }
+    finally { setGeocoding(false); }
   };
 
   const appliedJobIds = applications.map(a => a.job_id);
@@ -271,7 +286,36 @@ export default function LabourDashboard() {
             </div>
             <div>
               <Label className="text-[#9BA3B5] text-xs uppercase tracking-[0.15em]">Address</Label>
-              <Input data-testid="profile-address" value={profileForm.address} onChange={e => setProfileForm({...profileForm, address: e.target.value})} className="mt-1 bg-[#0B132B] border-[#28385E] text-white focus:border-[#00A8E8]" />
+              <div className="flex gap-2 mt-1">
+                <Input data-testid="profile-address" value={profileForm.address} onChange={e => setProfileForm({...profileForm, address: e.target.value})} className="bg-[#0B132B] border-[#28385E] text-white focus:border-[#00A8E8]" placeholder="City, State" />
+                <Button type="button" data-testid="profile-geocode-btn" onClick={handleGeocodeAddress} disabled={geocoding || !profileForm.address.trim()} variant="outline" className="border-[#28385E] text-[#9BA3B5] hover:text-[#00A8E8] hover:border-[#00A8E8] bg-transparent px-3 flex-shrink-0">
+                  {geocoding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Navigation className="w-4 h-4" />}
+                </Button>
+              </div>
+              {profileForm.latitude && profileForm.longitude && (
+                <p className="text-[10px] text-[#00A8E8] mt-1 flex items-center gap-1">
+                  <MapPin className="w-3 h-3" /> {profileForm.latitude.toFixed(4)}, {profileForm.longitude.toFixed(4)}
+                </p>
+              )}
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <Label className="text-[#9BA3B5] text-xs uppercase tracking-[0.15em]">Job Radius Preference</Label>
+                <span className="text-xs text-[#00A8E8] font-mono">{profileForm.preferred_radius_km} km</span>
+              </div>
+              <Input
+                data-testid="profile-radius"
+                type="range"
+                min="5"
+                max="200"
+                step="5"
+                value={profileForm.preferred_radius_km}
+                onChange={e => setProfileForm({...profileForm, preferred_radius_km: parseInt(e.target.value)})}
+                className="mt-1 w-full accent-[#00A8E8]"
+              />
+              <div className="flex justify-between text-[9px] text-[#9BA3B5] mt-0.5">
+                <span>5 km</span><span>50 km</span><span>100 km</span><span>200 km</span>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>

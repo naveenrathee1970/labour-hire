@@ -16,6 +16,7 @@ import LaboursPage from './pages/LaboursPage';
 import NotificationsPage from './pages/NotificationsPage';
 import ReviewsPage from './pages/ReviewsPage';
 import DocumentsPage from './pages/DocumentsPage';
+import NearbyJobsPage from './pages/NearbyJobsPage';
 
 function DashboardRouter() {
   const { user } = useAuth();
@@ -123,6 +124,11 @@ function AppRoutes() {
       <Route path="/documents" element={
         <ProtectedRoute>
           <DashboardLayout><DocumentsPage /></DashboardLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/nearby-jobs" element={
+        <ProtectedRoute>
+          <DashboardLayout><NearbyJobsPage /></DashboardLayout>
         </ProtectedRoute>
       } />
       <Route path="*" element={<Navigate to="/" replace />} />
