@@ -1,30 +1,26 @@
 # LabourHub - Labour Hiring & Management Platform
 
 ## Problem Statement
-Build a dashboard for Real estate, Construction builders, Labours and general people to hire verified labour. Features: employer registration with credentials (licence, Aadhaar), labour profiles with government verification, tool rental marketplace, wage payment/transfer system.
+Build a dashboard for Real estate, Construction builders, Labours and general people to hire verified labour. Features: employer registration with credentials, labour profiles with government verification, tool rental marketplace, wage payment/transfer, Stripe payments, document uploads, reviews, notifications/SMS.
 
 ## Architecture
 - **Frontend**: React + Tailwind CSS + Shadcn UI (port 3000)
 - **Backend**: FastAPI + MongoDB (port 8001)
 - **Auth**: JWT (httpOnly cookies + Bearer token), bcrypt password hashing
-- **Theme**: Dark blue (#0B132B) + Electric blue (#00A8E8) - "Jewel Authority" aesthetic
+- **Payments**: Stripe Checkout (via emergentintegrations)
+- **Storage**: Emergent Object Storage for document uploads
+- **Theme**: Dark blue (#0B132B) + Electric blue (#00A8E8)
 
 ## User Personas & Roles
-1. **Employer** - Posts jobs, manages applications, pays wages
-2. **Labour** - Browses/applies for jobs, manages profile, receives wages
+1. **Employer** - Posts jobs, manages applications, pays wages, uploads documents
+2. **Labour** - Browses/applies for jobs, manages profile, receives wages, uploads docs
 3. **Vendor** - Lists tools/equipment for rental
-4. **Admin** - Verifies users, monitors platform stats
+4. **Admin** - Verifies users & documents, monitors platform stats
 
-## Core Requirements (Static)
-- JWT-based auth with role-based access control
-- Employer job postings with project details, pay rates, safety precautions
-- Labour profiles with Aadhaar, skills, experience, verification status
-- Tool rental marketplace from vendors
-- Wallet system with top-up and wage transfer
-- Admin dashboard with user verification
+## What's Been Implemented
 
-## What's Been Implemented (2026-03-28)
-- Full authentication system (register, login, logout, refresh)
+### Phase 1 (2026-03-28)
+- Full JWT authentication system with role-based access
 - Role-based dashboards (Employer, Labour, Admin, Vendor)
 - Job posting CRUD with search/filter
 - Job applications (apply, accept, reject)
@@ -33,33 +29,29 @@ Build a dashboard for Real estate, Construction builders, Labours and general pe
 - Admin stats dashboard & user verification
 - Labour directory with search & verified filter
 - Brute force login protection
-- Responsive dark blue UI with sidebar navigation
 
-## Testing Results
-- Backend: 94.1% (32/34 passed)
-- Frontend: 95% (all major flows working)
+### Phase 2 (2026-03-28)
+- **Stripe Payment Gateway** - Checkout sessions for wallet top-up via Stripe
+- **Document Upload** - Aadhaar/Licence proof uploads with admin verification
+- **Mutual Review System** - 1-5 star ratings with comments (both employers and labourers)
+- **Notifications System** - In-app notifications for job alerts, applications, payments, reviews
+- **SMS Alerts** - Mock SMS logging for new job matches, application updates
+
+## Testing Results (Phase 2)
+- Backend: 96.1% (49/51 passed)
+- Frontend: 98%
 - Integration: 100%
+- New Features: 95%
 
 ## Prioritized Backlog
-### P0 (Critical)
-- All core features implemented
+### P1
+- Real Twilio SMS integration
+- Real email notifications (SendGrid/Resend)
+- Mobile-responsive improvements
 
-### P1 (Important)
-- Real payment gateway integration (Stripe/Razorpay)
-- Real government API verification (Aadhaar, DigiLocker)
-- Email notifications for applications & payments
-- File upload for documents (licence, ID proofs)
-
-### P2 (Nice to Have)
+### P2
 - Real-time chat between employer and labour
-- Rating/review system for labours and employers
 - Job contract generation (PDF)
-- Mobile responsive improvements
 - Push notifications
-- Reports & analytics dashboard
-
-## Next Tasks
-1. Add real payment gateway (Stripe) for wage payments
-2. Implement document upload for verification
-3. Add email notifications
-4. Build rating/review system
+- Advanced analytics dashboard
+- Labour skill verification badges
