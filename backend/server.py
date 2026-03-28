@@ -982,9 +982,9 @@ async def create_checkout(data: CheckoutRequest, request: Request, user: dict = 
     return {"url": session.url, "session_id": session.session_id}
 
 @api_router.get("/payments/status/{session_id}")
-async def payment_status(session_id: str, user: dict = Depends(get_current_user)):
+async def payment_status(session_id: str, request: Request, user: dict = Depends(get_current_user)):
     api_key = os.environ.get("STRIPE_API_KEY")
-    host_url = "https://labor-hire-hub.preview.emergentagent.com"
+    host_url = os.environ.get("FRONTEND_URL", str(request.base_url).rstrip("/"))
     webhook_url = f"{host_url}/api/webhook/stripe"
     stripe_checkout = StripeCheckout(api_key=api_key, webhook_url=webhook_url)
     status = await stripe_checkout.get_checkout_status(session_id)
