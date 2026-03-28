@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Header, Query
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -13,9 +13,12 @@ import logging
 import bcrypt
 import jwt
 import secrets
+import uuid
+import requests as http_requests
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime, timezone, timedelta
+from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -79,6 +82,57 @@ def serialize_doc(doc):
         if isinstance(val, datetime):
             doc[key] = val.isoformat()
     return doc
+
+# ============ Object Storage ============
+STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+APP_NAME = "labourhub"
+storage_key = None
+
+def init_storage():
+    global storage_key
+    if storage_key:
+        return storage_key
+    resp = http_requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    storage_key = resp.json()["storage_key"]
+    return storage_key
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = http_requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data, timeout=120
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+def get_object(path: str):
+    key = init_storage()
+    resp = http_requests.get(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key}, timeout=60
+    )
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+# ============ Notification Helper ============
+async def create_notification(user_id: str, title: str, message: str, ntype: str = "info", sms: bool = False, phone: str = ""):
+    notif = {
+        "user_id": user_id,
+        "title": title,
+        "message": message,
+        "type": ntype,
+        "read": False,
+        "sms_sent": sms,
+        "sms_phone": phone,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.notifications.insert_one(notif)
+    if sms and phone:
+        logger.info(f"[SMS ALERT] To: {phone} | {title}: {message}")
+    logger.info(f"[NOTIFICATION] User {user_id}: {title} - {message}")
 
 # Create the main app
 app = FastAPI()
@@ -150,6 +204,25 @@ class WalletTopUp(BaseModel):
 class VerifyUser(BaseModel):
     user_id: str
     verified: bool
+
+class ReviewCreate(BaseModel):
+    reviewed_user_id: str
+    job_id: Optional[str] = None
+    rating: int  # 1-5
+    comment: str = ""
+
+class CheckoutRequest(BaseModel):
+    amount: float
+    origin_url: str
+
+TOPUP_PACKAGES = {
+    "500": 500.0,
+    "1000": 1000.0,
+    "5000": 5000.0,
+    "10000": 10000.0,
+    "25000": 25000.0,
+    "50000": 50000.0,
+}
 
 # ============ Auth Endpoints ============
 
@@ -306,6 +379,18 @@ async def create_job(data: JobCreate, user: dict = Depends(get_current_user)):
     }
     result = await db.jobs.insert_one(job_doc)
     job_doc["_id"] = str(result.inserted_id)
+    # SMS notify all labourers about new job
+    labours = await db.users.find({"role": "labour"}, {"_id": 1, "phone": 1, "name": 1}).to_list(100)
+    for l in labours:
+        lid = str(l["_id"])
+        await create_notification(
+            lid,
+            "New Job Available",
+            f"'{data.title}' in {data.location} - Rs {data.pay_amount}/{data.pay_type}. Apply now!",
+            "job_alert",
+            sms=True,
+            phone=l.get("phone", "")
+        )
     return serialize_doc(job_doc)
 
 @api_router.get("/jobs")
@@ -401,6 +486,17 @@ async def apply_for_job(data: JobApplicationCreate, user: dict = Depends(get_cur
     result = await db.job_applications.insert_one(app_doc)
     await db.jobs.update_one({"_id": ObjectId(data.job_id)}, {"$inc": {"applications_count": 1}})
     app_doc["_id"] = str(result.inserted_id)
+    # Notify employer
+    employer = await db.users.find_one({"_id": ObjectId(job["employer_id"])}, {"password_hash": 0})
+    if employer:
+        await create_notification(
+            job["employer_id"],
+            "New Job Application",
+            f"{user.get('name', 'A worker')} applied for '{job.get('title', 'your job')}'.",
+            "application",
+            sms=True,
+            phone=employer.get("phone", "")
+        )
     return serialize_doc(app_doc)
 
 @api_router.get("/applications")
@@ -440,6 +536,18 @@ async def update_application_status(app_id: str, request: Request, user: dict = 
     if application["employer_id"] != user["_id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
     await db.job_applications.update_one({"_id": ObjectId(app_id)}, {"$set": {"status": new_status}})
+    # Notify labour about application status
+    labour = await db.users.find_one({"_id": ObjectId(application["labour_id"])}, {"password_hash": 0})
+    if labour:
+        status_msg = "accepted! Congratulations!" if new_status == "accepted" else "not accepted at this time."
+        await create_notification(
+            application["labour_id"],
+            f"Application {new_status.title()}",
+            f"Your application for '{application.get('job_title', 'the job')}' has been {status_msg}",
+            "application",
+            sms=True,
+            phone=labour.get("phone", "")
+        )
     return {"message": f"Application {new_status}"}
 
 # ============ Tool Rental Endpoints ============
@@ -635,6 +743,286 @@ async def list_labours(
     total = await db.users.count_documents(query)
     return {"labours": [serialize_doc(l) for l in labours], "total": total}
 
+# ============ Stripe Payment Endpoints ============
+
+@api_router.post("/payments/create-checkout")
+async def create_checkout(data: CheckoutRequest, request: Request, user: dict = Depends(get_current_user)):
+    amount = data.amount
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+    api_key = os.environ.get("STRIPE_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Payment not configured")
+    host_url = str(request.base_url).rstrip("/")
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=api_key, webhook_url=webhook_url)
+    origin = data.origin_url.rstrip("/")
+    success_url = f"{origin}/wallet?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{origin}/wallet"
+    metadata = {"user_id": user["_id"], "user_email": user["email"], "type": "wallet_topup"}
+    checkout_req = CheckoutSessionRequest(
+        amount=float(amount),
+        currency="usd",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata=metadata
+    )
+    session = await stripe_checkout.create_checkout_session(checkout_req)
+    # Record payment transaction
+    await db.payment_transactions.insert_one({
+        "session_id": session.session_id,
+        "user_id": user["_id"],
+        "user_email": user["email"],
+        "amount": float(amount),
+        "currency": "usd",
+        "metadata": metadata,
+        "payment_status": "initiated",
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"url": session.url, "session_id": session.session_id}
+
+@api_router.get("/payments/status/{session_id}")
+async def payment_status(session_id: str, user: dict = Depends(get_current_user)):
+    api_key = os.environ.get("STRIPE_API_KEY")
+    host_url = "https://labor-hire-hub.preview.emergentagent.com"
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=api_key, webhook_url=webhook_url)
+    status = await stripe_checkout.get_checkout_status(session_id)
+    # Update payment transaction
+    ptxn = await db.payment_transactions.find_one({"session_id": session_id})
+    if ptxn and ptxn.get("payment_status") != "paid":
+        await db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {"$set": {"payment_status": status.payment_status, "status": status.status}}
+        )
+        # Credit wallet only once
+        if status.payment_status == "paid" and ptxn.get("payment_status") != "paid":
+            amount = ptxn["amount"]
+            uid = ptxn["user_id"]
+            await db.wallets.update_one({"user_id": uid}, {"$inc": {"balance": amount}}, upsert=True)
+            await db.transactions.insert_one({
+                "from_user_id": "stripe",
+                "to_user_id": uid,
+                "amount": amount,
+                "type": "stripe_topup",
+                "description": f"Stripe top-up (Session: {session_id[:12]}...)",
+                "status": "completed",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            await create_notification(uid, "Payment Successful", f"Rs {amount} added to your wallet via Stripe.", "payment")
+    return {
+        "status": status.status,
+        "payment_status": status.payment_status,
+        "amount_total": status.amount_total,
+        "currency": status.currency,
+    }
+
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    try:
+        body = await request.body()
+        api_key = os.environ.get("STRIPE_API_KEY")
+        host_url = str(request.base_url).rstrip("/")
+        webhook_url = f"{host_url}/api/webhook/stripe"
+        stripe_checkout = StripeCheckout(api_key=api_key, webhook_url=webhook_url)
+        sig = request.headers.get("Stripe-Signature", "")
+        webhook_response = await stripe_checkout.handle_webhook(body, sig)
+        if webhook_response.payment_status == "paid":
+            ptxn = await db.payment_transactions.find_one({"session_id": webhook_response.session_id})
+            if ptxn and ptxn.get("payment_status") != "paid":
+                await db.payment_transactions.update_one(
+                    {"session_id": webhook_response.session_id},
+                    {"$set": {"payment_status": "paid", "status": "complete"}}
+                )
+                amount = ptxn["amount"]
+                uid = ptxn["user_id"]
+                await db.wallets.update_one({"user_id": uid}, {"$inc": {"balance": amount}}, upsert=True)
+                await db.transactions.insert_one({
+                    "from_user_id": "stripe",
+                    "to_user_id": uid,
+                    "amount": amount,
+                    "type": "stripe_topup",
+                    "description": f"Stripe webhook payment",
+                    "status": "completed",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"status": "error"}
+
+# ============ Document Upload Endpoints ============
+
+@api_router.post("/documents/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    doc_type: str = Query("aadhaar", description="Document type: aadhaar, licence, other"),
+    user: dict = Depends(get_current_user)
+):
+    allowed_types = ["image/jpeg", "image/png", "image/webp", "application/pdf"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Only JPEG, PNG, WebP, PDF allowed")
+    if file.size and file.size > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 5MB)")
+    ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
+    path = f"{APP_NAME}/documents/{user['_id']}/{uuid.uuid4()}.{ext}"
+    data = await file.read()
+    result = put_object(path, data, file.content_type or "application/octet-stream")
+    doc_record = {
+        "user_id": user["_id"],
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": file.content_type,
+        "size": result.get("size", len(data)),
+        "doc_type": doc_type,
+        "is_deleted": False,
+        "verified": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    insert_result = await db.documents.insert_one(doc_record)
+    doc_record["_id"] = str(insert_result.inserted_id)
+    await create_notification(user["_id"], "Document Uploaded", f"Your {doc_type} document has been uploaded for verification.", "document")
+    return serialize_doc(doc_record)
+
+@api_router.get("/documents")
+async def list_documents(user_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    query = {"is_deleted": False}
+    if user["role"] == "admin" and user_id:
+        query["user_id"] = user_id
+    else:
+        query["user_id"] = user["_id"]
+    docs = await db.documents.find(query).sort("created_at", -1).to_list(50)
+    return [serialize_doc(d) for d in docs]
+
+@api_router.get("/documents/file/{path:path}")
+async def download_document(path: str, auth: str = Query(None), user: dict = Depends(get_current_user)):
+    record = await db.documents.find_one({"storage_path": path, "is_deleted": False})
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+    if record["user_id"] != user["_id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    data, content_type = get_object(path)
+    return Response(content=data, media_type=record.get("content_type", content_type))
+
+@api_router.post("/documents/{doc_id}/verify")
+async def verify_document(doc_id: str, request: Request, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    body = await request.json()
+    verified = body.get("verified", True)
+    doc = await db.documents.find_one({"_id": ObjectId(doc_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await db.documents.update_one({"_id": ObjectId(doc_id)}, {"$set": {"verified": verified}})
+    status_text = "verified" if verified else "rejected"
+    await create_notification(doc["user_id"], "Document Verification", f"Your {doc.get('doc_type', 'document')} has been {status_text}.", "verification")
+    return {"message": f"Document {status_text}"}
+
+# ============ Review & Rating Endpoints ============
+
+@api_router.post("/reviews")
+async def create_review(data: ReviewCreate, user: dict = Depends(get_current_user)):
+    if data.rating < 1 or data.rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be 1-5")
+    if data.reviewed_user_id == user["_id"]:
+        raise HTTPException(status_code=400, detail="Cannot review yourself")
+    target = await db.users.find_one({"_id": ObjectId(data.reviewed_user_id)})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Prevent duplicate review for same job
+    if data.job_id:
+        existing = await db.reviews.find_one({
+            "reviewer_id": user["_id"],
+            "reviewed_user_id": data.reviewed_user_id,
+            "job_id": data.job_id
+        })
+        if existing:
+            raise HTTPException(status_code=400, detail="Already reviewed this user for this job")
+    review_doc = {
+        "reviewer_id": user["_id"],
+        "reviewer_name": user.get("name", ""),
+        "reviewer_role": user.get("role", ""),
+        "reviewed_user_id": data.reviewed_user_id,
+        "reviewed_user_name": target.get("name", ""),
+        "job_id": data.job_id or "",
+        "rating": data.rating,
+        "comment": data.comment,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = await db.reviews.insert_one(review_doc)
+    review_doc["_id"] = str(result.inserted_id)
+    # Update average rating on user
+    pipeline = [
+        {"$match": {"reviewed_user_id": data.reviewed_user_id}},
+        {"$group": {"_id": None, "avg": {"$avg": "$rating"}, "count": {"$sum": 1}}}
+    ]
+    agg = await db.reviews.aggregate(pipeline).to_list(1)
+    if agg:
+        avg_rating = round(agg[0]["avg"], 1)
+        review_count = agg[0]["count"]
+        await db.users.update_one(
+            {"_id": ObjectId(data.reviewed_user_id)},
+            {"$set": {"avg_rating": avg_rating, "review_count": review_count}}
+        )
+    rating_labels = {1: "Poor", 2: "Fair", 3: "Good", 4: "Very Good", 5: "Excellent"}
+    await create_notification(
+        data.reviewed_user_id,
+        "New Review",
+        f"{user.get('name', 'Someone')} rated you {data.rating}/5 ({rating_labels.get(data.rating, '')}).",
+        "review",
+        sms=True,
+        phone=target.get("phone", "")
+    )
+    return serialize_doc(review_doc)
+
+@api_router.get("/reviews/{user_id}")
+async def get_user_reviews(user_id: str):
+    reviews = await db.reviews.find({"reviewed_user_id": user_id}).sort("created_at", -1).to_list(50)
+    # Compute stats
+    pipeline = [
+        {"$match": {"reviewed_user_id": user_id}},
+        {"$group": {"_id": None, "avg": {"$avg": "$rating"}, "count": {"$sum": 1}}}
+    ]
+    agg = await db.reviews.aggregate(pipeline).to_list(1)
+    stats = {"avg_rating": 0, "review_count": 0}
+    if agg:
+        stats = {"avg_rating": round(agg[0]["avg"], 1), "review_count": agg[0]["count"]}
+    return {"reviews": [serialize_doc(r) for r in reviews], **stats}
+
+@api_router.get("/reviews/given/me")
+async def get_my_given_reviews(user: dict = Depends(get_current_user)):
+    reviews = await db.reviews.find({"reviewer_id": user["_id"]}).sort("created_at", -1).to_list(50)
+    return [serialize_doc(r) for r in reviews]
+
+# ============ Notification Endpoints ============
+
+@api_router.get("/notifications")
+async def list_notifications(user: dict = Depends(get_current_user)):
+    notifs = await db.notifications.find({"user_id": user["_id"]}).sort("created_at", -1).to_list(50)
+    return [serialize_doc(n) for n in notifs]
+
+@api_router.get("/notifications/unread-count")
+async def unread_count(user: dict = Depends(get_current_user)):
+    count = await db.notifications.count_documents({"user_id": user["_id"], "read": False})
+    return {"count": count}
+
+@api_router.patch("/notifications/{notif_id}/read")
+async def mark_notification_read(notif_id: str, user: dict = Depends(get_current_user)):
+    await db.notifications.update_one(
+        {"_id": ObjectId(notif_id), "user_id": user["_id"]},
+        {"$set": {"read": True}}
+    )
+    return {"message": "Marked as read"}
+
+@api_router.post("/notifications/mark-all-read")
+async def mark_all_read(user: dict = Depends(get_current_user)):
+    await db.notifications.update_many(
+        {"user_id": user["_id"], "read": False},
+        {"$set": {"read": True}}
+    )
+    return {"message": "All marked as read"}
+
 # ============ Root ============
 
 @api_router.get("/")
@@ -670,6 +1058,17 @@ async def startup():
     await db.wallets.create_index("user_id", unique=True)
     await db.transactions.create_index("from_user_id")
     await db.transactions.create_index("to_user_id")
+    await db.payment_transactions.create_index("session_id", unique=True)
+    await db.documents.create_index("user_id")
+    await db.reviews.create_index("reviewed_user_id")
+    await db.reviews.create_index("reviewer_id")
+    await db.notifications.create_index("user_id")
+    # Init storage
+    try:
+        init_storage()
+        logger.info("Object storage initialized")
+    except Exception as e:
+        logger.error(f"Storage init failed: {e}")
     # Seed admin
     await seed_admin()
     logger.info("Server started, admin seeded, indexes created")

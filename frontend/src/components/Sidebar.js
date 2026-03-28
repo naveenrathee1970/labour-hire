@@ -3,7 +3,8 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard, Briefcase, Users, Wrench, Wallet,
-  LogOut, Shield, ClipboardList, User, ChevronLeft, ChevronRight, HardHat
+  LogOut, Shield, ClipboardList, User, ChevronLeft, ChevronRight, HardHat,
+  Bell, Star, FileText
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Separator } from '../components/ui/separator';
@@ -16,6 +17,9 @@ const navItems = {
     { path: '/labours', label: 'Find Labour', icon: Users },
     { path: '/tools', label: 'Tool Rentals', icon: Wrench },
     { path: '/wallet', label: 'Wallet', icon: Wallet },
+    { path: '/reviews', label: 'Reviews', icon: Star },
+    { path: '/documents', label: 'Documents', icon: FileText },
+    { path: '/notifications', label: 'Notifications', icon: Bell },
   ],
   labour: [
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -24,6 +28,9 @@ const navItems = {
     { path: '/profile', label: 'My Profile', icon: User },
     { path: '/tools', label: 'Tool Rentals', icon: Wrench },
     { path: '/wallet', label: 'Wallet', icon: Wallet },
+    { path: '/reviews', label: 'Reviews', icon: Star },
+    { path: '/documents', label: 'Documents', icon: FileText },
+    { path: '/notifications', label: 'Notifications', icon: Bell },
   ],
   admin: [
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -32,12 +39,18 @@ const navItems = {
     { path: '/browse-jobs', label: 'All Jobs', icon: Briefcase },
     { path: '/tools', label: 'Tool Rentals', icon: Wrench },
     { path: '/wallet', label: 'Wallet', icon: Wallet },
+    { path: '/admin/documents', label: 'Documents', icon: FileText },
+    { path: '/reviews', label: 'Reviews', icon: Star },
+    { path: '/notifications', label: 'Notifications', icon: Bell },
   ],
   vendor: [
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/my-tools', label: 'My Tools', icon: Wrench },
     { path: '/tools', label: 'Marketplace', icon: Wrench },
     { path: '/wallet', label: 'Wallet', icon: Wallet },
+    { path: '/reviews', label: 'Reviews', icon: Star },
+    { path: '/documents', label: 'Documents', icon: FileText },
+    { path: '/notifications', label: 'Notifications', icon: Bell },
   ],
 };
 

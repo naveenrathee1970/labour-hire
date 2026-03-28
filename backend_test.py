@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 Comprehensive backend API testing for Labour Hire Hub platform
-Tests all endpoints including auth, jobs, applications, tools, wallet, and admin functions
+Tests all endpoints including auth, jobs, applications, tools, wallet, admin functions,
+and NEW FEATURES: Stripe payments, document upload, notifications/SMS, reviews system
 """
 
 import requests
 import sys
 import json
+import io
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -25,6 +27,9 @@ class LabourHireAPITester:
         self.job_id = None
         self.application_id = None
         self.tool_id = None
+        self.document_id = None
+        self.review_id = None
+        self.notification_id = None
         
         self.tests_run = 0
         self.tests_passed = 0
@@ -37,10 +42,14 @@ class LabourHireAPITester:
 
     def run_test(self, name: str, method: str, endpoint: str, expected_status: int, 
                  data: Optional[Dict] = None, headers: Optional[Dict] = None, 
-                 auth_token: Optional[str] = None) -> tuple[bool, Dict]:
+                 auth_token: Optional[str] = None, files: Optional[Dict] = None) -> tuple[bool, Dict]:
         """Run a single API test"""
         url = f"{self.api_url}{endpoint}"
-        test_headers = {'Content-Type': 'application/json'}
+        test_headers = {}
+        
+        # Only set Content-Type for JSON requests
+        if not files:
+            test_headers['Content-Type'] = 'application/json'
         
         if headers:
             test_headers.update(headers)
@@ -54,7 +63,13 @@ class LabourHireAPITester:
             if method == 'GET':
                 response = requests.get(url, headers=test_headers, timeout=30)
             elif method == 'POST':
-                response = requests.post(url, json=data, headers=test_headers, timeout=30)
+                if files:
+                    # For file uploads, don't set Content-Type header
+                    if 'Content-Type' in test_headers:
+                        del test_headers['Content-Type']
+                    response = requests.post(url, files=files, data=data, headers=test_headers, timeout=30)
+                else:
+                    response = requests.post(url, json=data, headers=test_headers, timeout=30)
             elif method == 'PUT':
                 response = requests.put(url, json=data, headers=test_headers, timeout=30)
             elif method == 'PATCH':
@@ -517,6 +532,198 @@ class LabourHireAPITester:
             200
         )
 
+        return True
+
+    def test_stripe_payment_endpoints(self):
+        """Test Stripe payment integration endpoints"""
+        if not self.employer_token:
+            self.log("❌ No employer token for Stripe payment tests", "ERROR")
+            return False
+
+        # Test create checkout session
+        success, response = self.run_test(
+            "Create Stripe Checkout",
+            "POST",
+            "/payments/create-checkout",
+            200,
+            data={
+                "amount": 50.0,
+                "origin_url": self.base_url
+            },
+            auth_token=self.employer_token
+        )
+        
+        session_id = None
+        if success and 'session_id' in response:
+            session_id = response['session_id']
+            self.log(f"✅ Stripe checkout session created: {session_id}")
+
+        # Test payment status check (will be pending/unpaid)
+        if session_id:
+            self.run_test(
+                "Check Payment Status",
+                "GET",
+                f"/payments/status/{session_id}",
+                200,
+                auth_token=self.employer_token
+            )
+
+        return True
+
+    def test_document_upload_endpoints(self):
+        """Test document upload and verification endpoints"""
+        if not self.labour_token:
+            self.log("❌ No labour token for document tests", "ERROR")
+            return False
+
+        # Create a test file (simulate a PDF)
+        test_file_content = b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n>>\nendobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000074 00000 n \n0000000120 00000 n \ntrailer\n<<\n/Size 4\n/Root 1 0 R\n>>\nstartxref\n179\n%%EOF"
+        test_file = io.BytesIO(test_file_content)
+        
+        # Test document upload
+        success, response = self.run_test(
+            "Upload Document",
+            "POST",
+            "/documents/upload?doc_type=aadhaar",
+            200,
+            files={'file': ('test_aadhaar.pdf', test_file, 'application/pdf')},
+            auth_token=self.labour_token
+        )
+        
+        if success and '_id' in response:
+            self.document_id = response['_id']
+            self.log(f"✅ Document uploaded with ID: {self.document_id}")
+
+        # Test list documents
+        self.run_test(
+            "List Documents",
+            "GET",
+            "/documents",
+            200,
+            auth_token=self.labour_token
+        )
+
+        # Test admin document verification
+        if self.document_id and self.admin_token:
+            self.run_test(
+                "Verify Document (Admin)",
+                "POST",
+                f"/documents/{self.document_id}/verify",
+                200,
+                data={"verified": True},
+                auth_token=self.admin_token
+            )
+
+        return True
+
+    def test_review_endpoints(self):
+        """Test mutual review and rating system"""
+        if not self.employer_token or not self.labour_id:
+            self.log("❌ Missing tokens for review tests", "ERROR")
+            return False
+
+        # Create a review
+        success, response = self.run_test(
+            "Create Review",
+            "POST",
+            "/reviews",
+            200,
+            data={
+                "reviewed_user_id": self.labour_id,
+                "rating": 5,
+                "comment": "Excellent work quality and punctuality!",
+                "job_id": self.job_id
+            },
+            auth_token=self.employer_token
+        )
+        
+        if success and '_id' in response:
+            self.review_id = response['_id']
+            self.log(f"✅ Review created with ID: {self.review_id}")
+
+        # Get reviews for a user
+        if self.labour_id:
+            self.run_test(
+                "Get User Reviews",
+                "GET",
+                f"/reviews/{self.labour_id}",
+                200
+            )
+
+        # Get reviews given by current user
+        self.run_test(
+            "Get My Given Reviews",
+            "GET",
+            "/reviews/given/me",
+            200,
+            auth_token=self.employer_token
+        )
+
+        # Test invalid rating (should fail)
+        self.run_test(
+            "Invalid Rating Review",
+            "POST",
+            "/reviews",
+            400,
+            data={
+                "reviewed_user_id": self.labour_id,
+                "rating": 6,  # Invalid rating > 5
+                "comment": "Test invalid rating"
+            },
+            auth_token=self.employer_token
+        )
+
+        return True
+
+    def test_notification_endpoints(self):
+        """Test notification system"""
+        if not self.labour_token:
+            self.log("❌ No labour token for notification tests", "ERROR")
+            return False
+
+        # List notifications
+        success, response = self.run_test(
+            "List Notifications",
+            "GET",
+            "/notifications",
+            200,
+            auth_token=self.labour_token
+        )
+        
+        # Get first notification ID if available
+        if success and isinstance(response, list) and len(response) > 0:
+            self.notification_id = response[0].get('_id')
+
+        # Get unread count
+        self.run_test(
+            "Get Unread Count",
+            "GET",
+            "/notifications/unread-count",
+            200,
+            auth_token=self.labour_token
+        )
+
+        # Mark notification as read (if we have one)
+        if self.notification_id:
+            self.run_test(
+                "Mark Notification Read",
+                "PATCH",
+                f"/notifications/{self.notification_id}/read",
+                200,
+                auth_token=self.labour_token
+            )
+
+        # Mark all notifications as read
+        self.run_test(
+            "Mark All Notifications Read",
+            "POST",
+            "/notifications/mark-all-read",
+            200,
+            auth_token=self.labour_token
+        )
+
+        return True
+
     def test_error_cases(self):
         """Test various error scenarios"""
         # Unauthorized access
@@ -579,6 +786,10 @@ class LabourHireAPITester:
             ("Application Endpoints", self.test_application_endpoints),
             ("Tool Endpoints", self.test_tool_endpoints),
             ("Wallet Endpoints", self.test_wallet_endpoints),
+            ("Stripe Payment Endpoints", self.test_stripe_payment_endpoints),
+            ("Document Upload Endpoints", self.test_document_upload_endpoints),
+            ("Review Endpoints", self.test_review_endpoints),
+            ("Notification Endpoints", self.test_notification_endpoints),
             ("Admin Endpoints", self.test_admin_endpoints),
             ("Labour Search", self.test_labour_search),
             ("Profile Endpoints", self.test_profile_endpoints),

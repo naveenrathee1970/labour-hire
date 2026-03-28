@@ -13,6 +13,9 @@ import WalletPage from './pages/WalletPage';
 import ToolRentals from './pages/ToolRentals';
 import ApplicationsPage from './pages/ApplicationsPage';
 import LaboursPage from './pages/LaboursPage';
+import NotificationsPage from './pages/NotificationsPage';
+import ReviewsPage from './pages/ReviewsPage';
+import DocumentsPage from './pages/DocumentsPage';
 
 function DashboardRouter() {
   const { user } = useAuth();
@@ -100,6 +103,26 @@ function AppRoutes() {
       <Route path="/admin/verification" element={
         <ProtectedRoute roles={['admin']}>
           <DashboardLayout><AdminDashboard /></DashboardLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/admin/documents" element={
+        <ProtectedRoute roles={['admin']}>
+          <DashboardLayout><DocumentsPage /></DashboardLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/notifications" element={
+        <ProtectedRoute>
+          <DashboardLayout><NotificationsPage /></DashboardLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/reviews" element={
+        <ProtectedRoute>
+          <DashboardLayout><ReviewsPage /></DashboardLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/documents" element={
+        <ProtectedRoute>
+          <DashboardLayout><DocumentsPage /></DashboardLayout>
         </ProtectedRoute>
       } />
       <Route path="*" element={<Navigate to="/" replace />} />

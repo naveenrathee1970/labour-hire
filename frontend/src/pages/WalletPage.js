@@ -1,26 +1,64 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useSearchParams } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import {
   Wallet, ArrowUpRight, ArrowDownLeft, IndianRupee,
-  CreditCard, Send, Plus, Search
+  CreditCard, Send, Plus, Search, ExternalLink, Loader2
 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 
 export default function WalletPage() {
   const { user, api } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [wallet, setWallet] = useState({ balance: 0 });
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showTopup, setShowTopup] = useState(false);
+  const [showStripeTopup, setShowStripeTopup] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
   const [topupAmount, setTopupAmount] = useState('');
+  const [stripeAmount, setStripeAmount] = useState('');
+  const [stripeLoading, setStripeLoading] = useState(false);
+  const [paymentStatus, setPaymentStatus] = useState(null);
   const [transferForm, setTransferForm] = useState({ to_user_id: '', amount: '', description: '' });
   const [labours, setLabours] = useState([]);
   const [searchLabour, setSearchLabour] = useState('');
+
+  const pollPaymentStatus = useCallback(async (sessionId, attempts = 0) => {
+    const maxAttempts = 8;
+    if (attempts >= maxAttempts) {
+      setPaymentStatus('timeout');
+      return;
+    }
+    try {
+      const res = await api('get', `/payments/status/${sessionId}`);
+      if (res.data.payment_status === 'paid') {
+        setPaymentStatus('paid');
+        loadData();
+        return;
+      } else if (res.data.status === 'expired') {
+        setPaymentStatus('expired');
+        return;
+      }
+      setPaymentStatus('processing');
+      setTimeout(() => pollPaymentStatus(sessionId, attempts + 1), 2500);
+    } catch {
+      setPaymentStatus('error');
+    }
+  }, [api]);
+
+  useEffect(() => {
+    const sessionId = searchParams.get('session_id');
+    if (sessionId) {
+      setPaymentStatus('processing');
+      pollPaymentStatus(sessionId);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, pollPaymentStatus, setSearchParams]);
 
   useEffect(() => { loadData(); }, []);
 
@@ -46,6 +84,26 @@ export default function WalletPage() {
       setShowTopup(false);
       loadData();
     } catch (err) { console.error(err); }
+  };
+
+  const handleStripeCheckout = async () => {
+    if (!stripeAmount || Number(stripeAmount) <= 0) return;
+    setStripeLoading(true);
+    try {
+      const origin = window.location.origin;
+      const res = await api('post', '/payments/create-checkout', {
+        amount: parseFloat(stripeAmount),
+        origin_url: origin,
+      });
+      if (res.data.url) {
+        window.location.href = res.data.url;
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Failed to create checkout session');
+    } finally {
+      setStripeLoading(false);
+    }
   };
 
   const handleTransfer = async () => {
@@ -79,6 +137,24 @@ export default function WalletPage() {
     <div data-testid="wallet-page" className="space-y-6">
       <h1 className="font-heading text-2xl sm:text-3xl font-bold text-white tracking-tight">Wallet & Transactions</h1>
 
+      {/* Payment Status Banner */}
+      {paymentStatus && (
+        <div data-testid="payment-status-banner" className={`p-4 rounded-lg border ${
+          paymentStatus === 'paid' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+          paymentStatus === 'processing' ? 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400' :
+          'bg-red-500/10 border-red-500/20 text-red-400'
+        }`}>
+          <div className="flex items-center gap-2">
+            {paymentStatus === 'processing' && <Loader2 className="w-4 h-4 animate-spin" />}
+            {paymentStatus === 'paid' && 'Payment successful! Your wallet has been credited.'}
+            {paymentStatus === 'processing' && 'Processing payment... Please wait.'}
+            {paymentStatus === 'expired' && 'Payment session expired. Please try again.'}
+            {paymentStatus === 'error' && 'Error checking payment. Please refresh the page.'}
+            {paymentStatus === 'timeout' && 'Payment status check timed out. Please check your email.'}
+          </div>
+        </div>
+      )}
+
       {/* Balance Card */}
       <div className="p-6 rounded-lg bg-gradient-to-r from-[#141E3A] to-[#1D2A4D] border border-[#28385E] relative overflow-hidden">
         <div className="absolute top-0 right-0 w-32 h-32 bg-[#00A8E8]/5 rounded-full -translate-y-1/2 translate-x-1/2" />
@@ -86,16 +162,18 @@ export default function WalletPage() {
         <p className="font-heading text-4xl font-bold text-white mb-4">
           <span className="text-[#00A8E8]">Rs</span> {(wallet.balance || 0).toLocaleString()}
         </p>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
+          {/* Quick Top-up */}
           <Dialog open={showTopup} onOpenChange={setShowTopup}>
             <DialogTrigger asChild>
-              <Button data-testid="topup-btn" className="bg-[#00A8E8] hover:bg-[#38BDF8] text-white rounded-md">
-                <Plus className="w-4 h-4 mr-2" /> Add Funds
+              <Button data-testid="topup-btn" variant="outline" className="border-[#28385E] text-white hover:border-[#00A8E8] bg-transparent">
+                <Plus className="w-4 h-4 mr-2" /> Quick Add
               </Button>
             </DialogTrigger>
             <DialogContent className="bg-[#141E3A] border-[#28385E] text-white max-w-sm">
-              <DialogHeader><DialogTitle className="font-heading text-xl text-white">Add Funds</DialogTitle></DialogHeader>
+              <DialogHeader><DialogTitle className="font-heading text-xl text-white">Quick Add Funds</DialogTitle></DialogHeader>
               <div className="space-y-4 mt-4">
+                <p className="text-xs text-[#9BA3B5]">Simulated top-up (no real payment)</p>
                 <div>
                   <Label className="text-[#9BA3B5] text-xs uppercase tracking-[0.15em]">Amount (Rs)</Label>
                   <Input data-testid="topup-amount" type="number" min="1" value={topupAmount} onChange={e => setTopupAmount(e.target.value)} className="mt-1 bg-[#0B132B] border-[#28385E] text-white focus:border-[#00A8E8]" placeholder="Enter amount" />
@@ -109,6 +187,37 @@ export default function WalletPage() {
                 </div>
                 <Button data-testid="confirm-topup" onClick={handleTopup} className="w-full bg-[#00A8E8] hover:bg-[#38BDF8] text-white rounded-md py-5">
                   Add Rs {topupAmount || '0'}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Stripe Checkout */}
+          <Dialog open={showStripeTopup} onOpenChange={setShowStripeTopup}>
+            <DialogTrigger asChild>
+              <Button data-testid="stripe-topup-btn" className="bg-[#00A8E8] hover:bg-[#38BDF8] text-white rounded-md">
+                <CreditCard className="w-4 h-4 mr-2" /> Pay via Stripe
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="bg-[#141E3A] border-[#28385E] text-white max-w-sm">
+              <DialogHeader><DialogTitle className="font-heading text-xl text-white">Stripe Payment</DialogTitle></DialogHeader>
+              <div className="space-y-4 mt-4">
+                <p className="text-xs text-[#9BA3B5]">Secure payment via Stripe checkout</p>
+                <div>
+                  <Label className="text-[#9BA3B5] text-xs uppercase tracking-[0.15em]">Amount (USD)</Label>
+                  <Input data-testid="stripe-amount" type="number" min="1" step="0.01" value={stripeAmount} onChange={e => setStripeAmount(e.target.value)} className="mt-1 bg-[#0B132B] border-[#28385E] text-white focus:border-[#00A8E8]" placeholder="Enter amount" />
+                </div>
+                <div className="flex gap-2">
+                  {[5, 10, 50, 100].map(amt => (
+                    <button key={amt} onClick={() => setStripeAmount(String(amt))} className="px-3 py-1.5 rounded-md text-xs bg-[#0B132B] border border-[#28385E] text-[#9BA3B5] hover:text-[#00A8E8] hover:border-[#00A8E8] transition-colors">
+                      ${amt}
+                    </button>
+                  ))}
+                </div>
+                <Button data-testid="confirm-stripe" onClick={handleStripeCheckout} disabled={stripeLoading} className="w-full bg-[#00A8E8] hover:bg-[#38BDF8] text-white rounded-md py-5">
+                  {stripeLoading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Processing...</> : <>
+                    <ExternalLink className="w-4 h-4 mr-2" /> Pay ${stripeAmount || '0'} via Stripe
+                  </>}
                 </Button>
               </div>
             </DialogContent>
@@ -184,7 +293,9 @@ export default function WalletPage() {
                     </div>
                     <div>
                       <p className="text-sm font-medium text-white">
-                        {txn.type === 'topup' ? 'Wallet Top-up' : isIncoming ? `From ${txn.from_user_name || 'System'}` : `To ${txn.to_user_name || 'User'}`}
+                        {txn.type === 'topup' ? 'Wallet Top-up' :
+                         txn.type === 'stripe_topup' ? 'Stripe Payment' :
+                         isIncoming ? `From ${txn.from_user_name || 'System'}` : `To ${txn.to_user_name || 'User'}`}
                       </p>
                       <p className="text-xs text-[#9BA3B5]">{txn.description} {txn.created_at ? `| ${new Date(txn.created_at).toLocaleDateString()}` : ''}</p>
                     </div>
