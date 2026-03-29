@@ -1,0 +1,65 @@
+/* Custom animations and utilities */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInLeft {
+    from { opacity: 0; transform: translateX(-20px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0, 168, 232, 0.3); }
+    50% { box-shadow: 0 0 20px 4px rgba(0, 168, 232, 0.15); }
+}
+
+.animate-fade-in {
+    animation: fadeIn 0.5s ease-out forwards;
+}
+
+.animate-slide-left {
+    animation: slideInLeft 0.4s ease-out forwards;
+}
+
+.animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.stagger-1 { animation-delay: 0.1s; }
+.stagger-2 { animation-delay: 0.2s; }
+.stagger-3 { animation-delay: 0.3s; }
+.stagger-4 { animation-delay: 0.4s; }
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: #0B132B;
+}
+::-webkit-scrollbar-thumb {
+    background: #28385E;
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #00A8E8;
+}
+
+/* Glass effect */
+.glass {
+    background: rgba(20, 30, 58, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(40, 56, 94, 0.5);
+}
+
+/* Stat card hover */
+.stat-card {
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.stat-card:hover {
+    transform: translateY(-2px);
+    border-color: #00A8E8;
+}
