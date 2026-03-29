@@ -1307,7 +1307,7 @@ async def seed_admin():
 
     # Write test credentials
     Path("memory").mkdir(exist_ok=True)
-    with open("/app/memory/test_credentials.md", "w") as f:
+    with open("memory/test_credentials.md", "w") as f:
         f.write(f"# Test Credentials\n\n")
         f.write(f"## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n")
         f.write(f"## Auth Endpoints\n- POST /api/auth/register\n- POST /api/auth/login\n- POST /api/auth/logout\n- GET /api/auth/me\n- POST /api/auth/refresh\n")
